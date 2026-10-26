@@ -23,6 +23,21 @@ uv run archive-bulk-download 10
 
 # Save to a custom folder instead of ./downloads
 uv run archive-bulk-download 5 --output-dir /path/to/folder
+
+# List tar file paths to tar_files.csv (default filename)
+uv run archive-bulk-download 20 --list
+
+# List tar file paths to a custom CSV file
+uv run archive-bulk-download 20 --list my_tar_files.csv
+
+# List ALL available tar files with sizes and total GB (no count)
+uv run archive-bulk-download --list
+uv run archive-bulk-download --list all_tar_files.csv
+
+# Short form
+uv run archive-bulk-download 20 -l
+uv run archive-bulk-download 20 -l my_tar_files.csv
+uv run archive-bulk-download -l
 ```
 
 Without `uv`:
@@ -35,8 +50,9 @@ PYTHONPATH=src python3 -m archive_bulk_download.downloader 10
 
 | Argument | Description | Default |
 | --- | --- | --- |
-| `count` | Number of `.tar` files to download (positive integer). | required |
+| `count` | Number of `.tar` files to download/list (positive integer). Required for download; optional with `--list` (omits to list all). | required |
 | `-o`, `--output-dir` | Directory to save the files in. | `./downloads` |
+| `-l`, `--list` [FILE] | List `.tar` file info to a CSV file instead of downloading. Use `FILE` as the output name (default: `tar_files.csv`). Columns: `id, name, url, size` (size in human-readable MB). Omit `COUNT` to list **all** available files with sizes and a total GB sum row at the end. | — |
 
 ## How it works
 

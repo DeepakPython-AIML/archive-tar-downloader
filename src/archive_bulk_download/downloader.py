@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import sys
 import time
@@ -216,6 +217,118 @@ def run(count: int, output_dir: Path) -> int:
     return 0 if downloaded_new + skipped == count else 1
 
 
+class ProgressBar:
+    """Simple in-place terminal progress bar (standard library only)."""
+
+    def __init__(self, total: int | None = None, width: int = 40):
+        self.total = total
+        self.width = width
+        self.current = 0
+        self.started = False
+
+    def update(self, current: int, total: int | None = None, suffix: str = "") -> None:
+        self.current = current
+        if total is not None:
+            self.total = total
+        if self.total:
+            pct = current / self.total * 100
+            filled = int(self.width * current // self.total)
+            bar = "#" * filled + "-" * (self.width - filled)
+            line = f"\r[{bar}] {pct:5.1f}% ({current}/{self.total}) {suffix}"
+        else:
+            line = f"\rListing file {current}... {suffix}"
+        print(line, end="", flush=True)
+        self.started = True
+
+    def finish(self, suffix: str = "") -> None:
+        if self.started:
+            print()  # move to next line
+
+
+def list_tar_files(count: int | None, output_file: Path) -> int:
+    """Write .tar file info to a CSV file instead of downloading.
+
+    CSV columns: id, name, url, size.
+    Opens/closes the file after every row so no long-lived connection is held.
+    If ``count`` is None, all available `.tar` files are listed and a total
+    size row is appended at the end.
+    """
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Collection : {COLLECTION_URL}")
+    print(f"Output file: {output_file}")
+    if count is not None:
+        print(f"Target     : {count} tar file(s)\n")
+    else:
+        print("Target     : all available tar files\n")
+
+    # Write CSV header first (create / truncate file).
+    with output_file.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["id", "name", "url", "size"])
+
+    listed = 0
+    failed = 0
+    total_bytes = 0
+    progress = ProgressBar(total=count, width=40)
+
+    for identifier in iter_item_identifiers():
+        if count is not None and listed >= count:
+            break
+
+        try:
+            tar = find_tar_file(identifier)
+        except RuntimeError as error:
+            print(f"\n[skip] {identifier}: {error}")
+            failed += 1
+            progress.update(listed, suffix=f"{failed} failed")
+            continue
+        if tar is None:
+            print(f"\n[skip] {identifier}: no .tar file in this item")
+            failed += 1
+            progress.update(listed, suffix=f"{failed} skipped")
+            continue
+
+        filename, size = tar
+        url = DOWNLOAD_URL.format(
+            identifier=urllib.parse.quote(identifier),
+            filename=urllib.parse.quote(filename),
+        )
+
+        listed += 1
+        size_str = _human(size) if size else "unknown"
+        if size:
+            total_bytes += size
+
+        # Open, append one row, close immediately — no long-lived connection.
+        with output_file.open("a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([identifier, filename, url, size_str])
+
+        progress.update(listed, suffix=filename)
+
+    progress.finish()
+
+    # Append total size row at the end.
+    total_gb = total_bytes / (1024**3)
+    with output_file.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([])
+        writer.writerow(["total", "", "", f"{total_gb:.2f} GB ({total_bytes:,} bytes)"])
+
+    print()
+    if count is not None:
+        print(
+            f"Listed {listed} tar file(s) in {output_file} ({failed} failed)"
+        )
+        return 0 if listed == count else 1
+    else:
+        print(
+            f"Listed {listed} tar file(s) in {output_file} "
+            f"({failed} failed), total size: {total_gb:.2f} GB"
+        )
+        return 0 if failed == 0 else 1
+
+
 def _positive_int(value: str) -> int:
     number = int(value)
     if number < 1:
@@ -227,7 +340,14 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Download .tar files from the arXiv bulk collection on archive.org."
     )
-    parser.add_argument("count", type=_positive_int, help="number of .tar files to download, e.g. 10 or 20")
+    parser.add_argument(
+        "count",
+        type=_positive_int,
+        nargs="?",
+        default=None,
+        help="number of .tar files to download/list. "
+        "If omitted with --list, all available files are listed.",
+    )
     parser.add_argument(
         "-o",
         "--output-dir",
@@ -235,9 +355,25 @@ def main(argv: list[str] | None = None) -> None:
         default=DEFAULT_OUTPUT_DIR,
         help=f"directory to save files in (default: {DEFAULT_OUTPUT_DIR})",
     )
+    parser.add_argument(
+        "-l",
+        "--list",
+        nargs="?",
+        const="tar_files.csv",
+        default=None,
+        help="list .tar file info to a CSV file instead of downloading "
+        "(default filename: tar_files.csv). "
+        "Omit COUNT to list all available files with sizes and total GB.",
+    )
     args = parser.parse_args(argv)
     try:
-        sys.exit(run(args.count, args.output_dir))
+        if args.list is not None:
+            list_path = Path(args.list)
+            sys.exit(list_tar_files(args.count, list_path))
+        else:
+            if args.count is None:
+                parser.error("the following arguments are required: count")
+            sys.exit(run(args.count, args.output_dir))
     except KeyboardInterrupt:
         print("\nInterrupted. Partial downloads (*.part) are resumed on the next run.")
         sys.exit(130)
